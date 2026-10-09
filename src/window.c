@@ -2459,6 +2459,11 @@ swash_window_save_overwrite_action(GtkWidget  *widget,
   if (self->texture == NULL)
     return;
 
+  if (self->output_file != NULL) {
+    swash_window_begin_save_to_file(self, self->output_file, FALSE);
+    return;
+  }
+
   if (self->current_file == NULL) {
     swash_window_prompt_save(self, FALSE);
     return;
@@ -2748,6 +2753,7 @@ static void
 swash_window_clear_image(SwashWindow *self)
 {
   g_clear_object(&self->current_file);
+  g_clear_object(&self->output_file);
   g_clear_object(&self->texture);
   if (self->image_surface != NULL) {
     cairo_surface_destroy(self->image_surface);
@@ -2767,6 +2773,16 @@ swash_window_clear_image(SwashWindow *self)
   self->fit_mode = TRUE;
   swash_window_update_picture_size(self);
   swash_window_sync_state(self);
+}
+
+void
+swash_window_set_output_file(SwashWindow *self,
+                             GFile       *file)
+{
+  g_return_if_fail(SWASH_IS_WINDOW(self));
+  g_return_if_fail(file == NULL || G_IS_FILE(file));
+
+  g_set_object(&self->output_file, file);
 }
 
 static void
@@ -3035,6 +3051,7 @@ swash_window_dispose(GObject *object)
   }
 
   g_clear_object(&self->current_file);
+  g_clear_object(&self->output_file);
   g_clear_pointer(&self->source_name, g_free);
   g_clear_object(&self->texture);
   if (self->image_surface != NULL) {

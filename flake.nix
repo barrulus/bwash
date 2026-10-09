@@ -27,9 +27,17 @@
         devShells.default = pkgs.mkShell {
           inputsFrom = [ self.packages.${system}.default ];
 
+          # The unwrapped development executable needs GTK's dialog schemas.
+          GSETTINGS_SCHEMA_DIR = pkgs.glib.getSchemaPath pkgs.gtk4;
+
           packages = with pkgs; [
             tesseract
             wl-clipboard
+            # Isolated GUI regression tests; not included in the application.
+            dbus
+            xvfb-run
+            xdotool
+            (python3.withPackages (ps: [ ps.pillow ]))
           ];
         };
 

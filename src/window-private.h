@@ -131,6 +131,7 @@ struct _SwashWindow {
   char *shortcut_accels[SWASH_SHORTCUT_COUNT];
 
   GFile *current_file;
+  GFile *output_file;
   char *source_name;
   GdkTexture *texture;
   cairo_surface_t *image_surface;

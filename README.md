@@ -83,6 +83,40 @@ Use `--stdin` explicitly and set the suggested filename for saving:
 grim -g "$(slurp)" - | swash --stdin --name "Screenshot.png"
 ```
 
+Supply a destination to save with Ctrl+S without a file dialog:
+
+```bash
+grim -g "$(slurp)" - | swash --stdin --name "Screenshot.png" --output-filename "$HOME/Pictures/Screenshots/Screenshot.png"
+swash original.png --output-filename "edited copy.png"
+```
+
+`--output-filename` requires an input image (a file, `-`, or `--stdin`).
+Relative destinations are resolved against the invoking command's working
+directory, including when Swash is already running. Opening or closing the
+editor does not create the output file; it is written only when you save.
+The parent directory must already exist. Invalid or unwritable destinations
+show an error when saving and leave the editor open.
+
+Saving replaces an existing destination without an overwrite prompt. The
+input file is kept separate and is only overwritten if you explicitly choose
+it as the destination. The filename extension selects the export format, as
+with ordinary saves; unknown extensions use PNG. “Save as copy” remains
+available and does not change the supplied destination. Opening another image
+clears that destination. Without `--output-filename`, existing save behavior
+is unchanged.
+
+## Tests
+
+```bash
+nix develop --command meson setup build --buildtype=debug
+nix develop --command meson test -C build --print-errorlogs
+```
+
+The Nix development shell includes the GUI test dependencies. Outside Nix,
+the `output-filename` test needs Python 3 with Pillow, `xdotool`, `xvfb-run`,
+and `dbus-run-session`; it reports a skip if these are unavailable. It uses
+an isolated display, session bus, and temporary settings directory.
+
 ## Acknowledgements
 
 Swash is a fork of [Waytator](https://github.com/faetalize/waytator).

@@ -20,6 +20,12 @@ static const GOptionEntry app_options[] = {
     .arg_description = "NAME",
   },
   {
+    .long_name = "output-filename",
+    .arg = G_OPTION_ARG_STRING,
+    .description = "Save directly to PATH (replaced when saving)",
+    .arg_description = "PATH",
+  },
+  {
     .long_name = "version",
     .short_name = 'v',
     .arg = G_OPTION_ARG_NONE,
@@ -175,8 +181,10 @@ app_command_line(GApplication            *app,
   int status = 0;
   gboolean use_stdin;
   const char *stdin_name = "stdin.png";
+  const char *output_filename = NULL;
   g_autoptr(GError) error = NULL;
   g_autoptr(GFile) file = NULL;
+  g_autoptr(GFile) output_file = NULL;
   SwashWindow *window;
 
   (void) user_data;
@@ -185,6 +193,7 @@ app_command_line(GApplication            *app,
   options = g_application_command_line_get_options_dict(command_line);
   use_stdin = g_variant_dict_contains(options, "stdin");
   g_variant_dict_lookup(options, "name", "&s", &stdin_name);
+  g_variant_dict_lookup(options, "output-filename", "&s", &output_filename);
 
   if (argc > 2) {
     g_application_command_line_printerr(command_line,
@@ -210,6 +219,19 @@ app_command_line(GApplication            *app,
     goto done;
   }
 
+  if (output_filename != NULL) {
+    if (*output_filename == '\0' || (!use_stdin && file == NULL)) {
+      g_application_command_line_printerr(command_line,
+                                          "--output-filename requires a non-empty path and an input image or --stdin\n");
+      status = 1;
+      goto done;
+    }
+
+    /* Resolve against the caller's cwd, even when this command is forwarded
+     * to an existing application instance over D-Bus. */
+    output_file = g_application_command_line_create_file_for_arg(command_line, output_filename);
+  }
+
   window = app_get_or_create_window(ADW_APPLICATION(app));
 
   if (use_stdin) {
@@ -233,6 +255,9 @@ app_command_line(GApplication            *app,
       goto done;
     }
   }
+
+  if (use_stdin || file != NULL)
+    swash_window_set_output_file(window, output_file);
 
   gtk_window_present(GTK_WINDOW(window));
 

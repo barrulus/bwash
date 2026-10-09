@@ -31,7 +31,7 @@ configure_file(
   configuration: swash_conf,
 )
 
-executable(
+swash_executable = executable(
   'swash',
   swash_sources,
   swash_resources,
@@ -50,3 +50,11 @@ editor_utils_test = executable(
 )
 
 test('editor-utils', editor_utils_test)
+
+python = find_program('python3', required: false)
+if python.found()
+  test('output-filename', python,
+    args: [files('test-output-filename.py'), swash_executable],
+    timeout: 120,
+  )
+endif
