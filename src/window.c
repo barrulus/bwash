@@ -3,6 +3,7 @@
 #include "swash-config.h"
 
 #include "export.h"
+#include "clipboard.h"
 #include "editor-utils.h"
 #include "ocr.h"
 #include "render.h"
@@ -10,6 +11,9 @@
 
 #include <cairo.h>
 #include <string.h>
+#ifdef GDK_WINDOWING_WAYLAND
+#include <gdk/wayland/gdkwayland.h>
+#endif
 #ifdef __GLIBC__
 #include <malloc.h>
 #endif
@@ -1701,24 +1705,12 @@ swash_window_can_claim_clipboard(SwashWindow *self)
   return gtk_window_is_active(GTK_WINDOW(self));
 }
 
-/* Claims the selection synchronously, on the main thread, so that it happens
- * within the input event that asked for it and therefore while the window is
- * still focused. */
-static gboolean
-swash_window_claim_clipboard(SwashWindow *self,
-                                gboolean        report_errors)
+static SwashCopyResult *
+swash_window_render_clipboard(SwashWindow *self,
+                              GError     **error)
 {
-  g_autoptr(GError) error = NULL;
-  g_autoptr(GdkContentProvider) provider = NULL;
-  g_autoptr(GdkContentFormats) provider_formats = NULL;
-  GdkContentProvider *providers[2];
   SwashExportRequest *request;
   SwashCopyResult *copy_result;
-  GdkClipboard *clipboard;
-  const gint64 started_at = g_get_monotonic_time();
-
-  if (self->texture == NULL)
-    return FALSE;
 
   request = swash_export_request_new(self->texture,
                                         swash_window_strokes(self),
@@ -1730,24 +1722,25 @@ swash_window_claim_clipboard(SwashWindow *self,
                                         self->allow_highlighter_overlap,
                                         swash_stroke_render,
                                         swash_document_get_image_generation(self->document),
-                                        &error);
-  if (request == NULL) {
-    if (report_errors)
-      swash_window_show_error(self, error->message);
-    else
-      g_warning("Auto-copy failed: %s", error->message);
-    return FALSE;
-  }
+                                        error);
+  if (request == NULL)
+    return NULL;
 
-  copy_result = swash_export_render_copy(request, &error);
+  copy_result = swash_export_render_copy(request, error);
   swash_export_request_free(request);
-  if (copy_result == NULL) {
-    if (report_errors)
-      swash_window_show_error(self, error->message);
-    else
-      g_warning("Auto-copy failed: %s", error->message);
-    return FALSE;
-  }
+  return copy_result;
+}
+
+/* Keep the GTK fallback synchronous so a Wayland selection claim happens
+ * within the input event while the window is still focused. */
+static gboolean
+swash_window_claim_clipboard(SwashWindow     *self,
+                             SwashCopyResult *copy_result)
+{
+  g_autoptr(GdkContentProvider) provider = NULL;
+  g_autoptr(GdkContentFormats) provider_formats = NULL;
+  GdkContentProvider *providers[2];
+  GdkClipboard *clipboard;
 
   clipboard = gdk_display_get_clipboard(gtk_widget_get_display(GTK_WIDGET(self)));
   /* The texture is offered first for consumers that take GdkTexture directly;
@@ -1756,25 +1749,26 @@ swash_window_claim_clipboard(SwashWindow *self,
   providers[0] = gdk_content_provider_new_typed(GDK_TYPE_TEXTURE, copy_result->texture);
   providers[1] = gdk_content_provider_new_for_bytes(copy_result->mime_type, copy_result->bytes);
   provider = gdk_content_provider_new_union(providers, G_N_ELEMENTS(providers));
-  swash_copy_result_free(copy_result);
 
   provider_formats = gdk_content_provider_ref_formats(provider);
   swash_window_log_formats("Clipboard provider formats", provider_formats);
 
-  if (!gdk_clipboard_set_content(clipboard, provider)) {
-    if (report_errors)
-      swash_window_show_error(self, "Could not copy image to clipboard");
-    else
-      g_warning("Auto-copy failed: could not claim the clipboard");
+  if (!gdk_clipboard_set_content(clipboard, provider))
     return FALSE;
-  }
 
   swash_window_log_formats("Clipboard accepted formats", gdk_clipboard_get_formats(clipboard));
-  self->clipboard_claim_cost = g_get_monotonic_time() - started_at;
-  g_debug("Clipboard claimed in %.1f ms (window %s)",
-          self->clipboard_claim_cost / 1000.0,
-          swash_window_can_claim_clipboard(self) ? "active" : "inactive");
   return TRUE;
+}
+
+static gboolean
+swash_window_is_wayland(SwashWindow *self)
+{
+#ifdef GDK_WINDOWING_WAYLAND
+  return GDK_IS_WAYLAND_DISPLAY(gtk_widget_get_display(GTK_WIDGET(self)));
+#else
+  (void) self;
+  return FALSE;
+#endif
 }
 
 static void
@@ -1787,38 +1781,120 @@ swash_window_flash_copy_success(SwashWindow *self)
                                                  self);
 }
 
-void
-swash_window_trigger_copy(SwashWindow *self,
-                             gboolean        user_initiated)
+static void
+swash_window_copy_completed(SwashWindow *self,
+                             gboolean     user_initiated,
+                             gboolean     close_after_copy,
+                             const GError *error)
 {
-  if (!swash_window_claim_clipboard(self, user_initiated))
-    return;
+  gboolean close_pending = self->close_pending;
 
-  self->auto_copy_pending = FALSE;
-  self->auto_copy_last_claim = g_get_monotonic_time();
+  self->copy_in_progress = FALSE;
+  self->close_pending = FALSE;
+  gtk_widget_set_sensitive(GTK_WIDGET(self->copy_button), self->texture != NULL);
 
-  if (!user_initiated)
-    return;
-
-  if (self->close_after_copy) {
-    GdkClipboard *clipboard = gdk_display_get_clipboard(gtk_widget_get_display(GTK_WIDGET(self)));
-
-    gdk_clipboard_store_async(clipboard,
-                              G_PRIORITY_DEFAULT,
-                              NULL,
-                              swash_window_clipboard_store_ready,
-                              g_object_ref(self));
+  if (error != NULL) {
+    self->auto_copy_pending = FALSE;
+    if (user_initiated || close_pending)
+      swash_window_show_error(self, error->message);
+    else
+      g_warning("Auto-copy failed: %s", error->message);
     return;
   }
 
-  swash_window_flash_copy_success(self);
+  if (close_after_copy || close_pending) {
+    gtk_window_close(GTK_WINDOW(self));
+    return;
+  }
+
+  if (user_initiated)
+    swash_window_flash_copy_success(self);
+
+  if (self->auto_copy_pending && swash_window_can_claim_clipboard(self))
+    swash_window_trigger_copy(self, FALSE);
+}
+
+typedef struct {
+  SwashWindow *window;
+  gboolean user_initiated;
+  gboolean close_after_copy;
+  gint64 started_at;
+} SwashCopyOperation;
+
+static void
+swash_window_helper_copy_ready(GObject      *source,
+                               GAsyncResult *result,
+                               gpointer      user_data)
+{
+  SwashCopyOperation *operation = user_data;
+  SwashWindow *self = operation->window;
+  g_autoptr(GError) error = NULL;
+
+  (void) source;
+
+  swash_clipboard_copy_finish(result, &error);
+  self->clipboard_claim_cost = g_get_monotonic_time() - operation->started_at;
+  swash_window_copy_completed(self, operation->user_initiated,
+                              operation->close_after_copy, error);
+  g_object_unref(self);
+  g_free(operation);
+}
+
+void
+swash_window_trigger_copy(SwashWindow *self,
+                          gboolean     user_initiated)
+{
+  g_autoptr(GError) error = NULL;
+  g_autofree char *helper = NULL;
+  SwashCopyResult *copy_result;
+  gint64 started_at = g_get_monotonic_time();
+  gboolean close_after_copy = user_initiated && self->close_after_copy;
+
+  if (self->texture == NULL || self->clipboard_store_in_progress)
+    return;
+  if (self->copy_in_progress) {
+    self->auto_copy_pending = TRUE;
+    return;
+  }
+
+  self->auto_copy_pending = FALSE;
+  self->auto_copy_last_claim = started_at;
+  copy_result = swash_window_render_clipboard(self, &error);
+  if (copy_result == NULL) {
+    swash_window_copy_completed(self, user_initiated, close_after_copy, error);
+    return;
+  }
+
+  if (swash_window_is_wayland(self))
+    helper = g_find_program_in_path("wl-copy");
+
+  if (helper != NULL) {
+    SwashCopyOperation *operation = g_new0(SwashCopyOperation, 1);
+
+    operation->window = g_object_ref(self);
+    operation->user_initiated = user_initiated;
+    operation->close_after_copy = close_after_copy;
+    operation->started_at = started_at;
+    self->copy_in_progress = TRUE;
+    gtk_widget_set_sensitive(GTK_WIDGET(self->copy_button), FALSE);
+    swash_clipboard_copy_async(helper, copy_result->bytes, copy_result->mime_type,
+                               swash_window_helper_copy_ready, operation);
+  } else {
+    if (!swash_window_claim_clipboard(self, copy_result))
+      g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                          "Could not copy image to clipboard");
+    self->clipboard_claim_cost = g_get_monotonic_time() - started_at;
+    swash_window_copy_completed(self, user_initiated, close_after_copy, error);
+  }
+
+  swash_copy_result_free(copy_result);
 }
 
 /* Auto-copy runs off document changes, so it is throttled: the first change
  * claims immediately (a copy has to be on the clipboard before the user
  * switches away), and further changes within the interval are coalesced into
- * one trailing claim. Claiming is synchronous, so the interval follows what a
- * claim actually costs on this image — a 12 MP photo takes ~130 ms, and
+ * one trailing claim. Rendering runs on the main thread, so the interval
+ * follows the copy cost on this image — a 12 MP photo takes ~130 ms, and
  * repeating that every 200 ms while strokes are being drawn would be felt. */
 #define SWASH_AUTO_COPY_INTERVAL_MS 200
 #define SWASH_AUTO_COPY_MAX_INTERVAL_MS 2000
@@ -2211,26 +2287,21 @@ swash_window_log_formats(const char      *label,
   g_debug("%s: %s", label, description);
 }
 
-/* A Wayland selection lives in the client that owns it, and no session
- * component takes it over when that client exits: a clipboard history manager
- * records the content but does not become its owner. Quitting right after the
- * copy therefore throws it away. The window is destroyed as the preference
- * asks, but the process stays alive without any window, still serving the
- * selection, until another client claims it — the same thing wl-copy does. */
-#define SWASH_CLIPBOARD_HOLD_TIMEOUT_SECONDS (10 * 60)
+/* GTK fallback for missing helpers and for text selections. Keep one hold
+ * per clipboard until ownership is replaced or cleared, with no expiry. */
+#define SWASH_CLIPBOARD_HOLD_KEY "swash-clipboard-hold"
 
 typedef struct {
   GApplication *application;
   GdkClipboard *clipboard;
   gulong changed_handler;
-  guint timeout_id;
 } SwashClipboardHold;
 
 static void
 swash_clipboard_hold_release(SwashClipboardHold *hold)
 {
   g_clear_signal_handler(&hold->changed_handler, hold->clipboard);
-  g_clear_handle_id(&hold->timeout_id, g_source_remove);
+  g_object_set_data(G_OBJECT(hold->clipboard), SWASH_CLIPBOARD_HOLD_KEY, NULL);
   g_application_release(hold->application);
   g_object_unref(hold->application);
   g_object_unref(hold->clipboard);
@@ -2243,22 +2314,11 @@ swash_clipboard_hold_changed(GdkClipboard *clipboard,
 {
   SwashClipboardHold *hold = user_data;
 
-  if (gdk_clipboard_is_local(clipboard))
+  if (gdk_clipboard_get_content(clipboard) != NULL)
     return;
 
   g_debug("Clipboard claimed by another client; releasing hold");
   swash_clipboard_hold_release(hold);
-}
-
-static gboolean
-swash_clipboard_hold_timeout(gpointer user_data)
-{
-  SwashClipboardHold *hold = user_data;
-
-  hold->timeout_id = 0;
-  g_debug("Clipboard hold expired after %d seconds", SWASH_CLIPBOARD_HOLD_TIMEOUT_SECONDS);
-  swash_clipboard_hold_release(hold);
-  return G_SOURCE_REMOVE;
 }
 
 /* Tearing the window down frees the document, the image and the render caches,
@@ -2290,7 +2350,9 @@ swash_window_close_holding_clipboard(SwashWindow *self)
     gdk_display_get_clipboard(gtk_widget_get_display(GTK_WIDGET(self)));
   SwashClipboardHold *hold;
 
-  if (application == NULL) {
+  if (application == NULL
+      || gdk_clipboard_get_content(clipboard) == NULL
+      || g_object_get_data(G_OBJECT(clipboard), SWASH_CLIPBOARD_HOLD_KEY) != NULL) {
     gtk_window_destroy(GTK_WINDOW(self));
     return;
   }
@@ -2302,9 +2364,7 @@ swash_window_close_holding_clipboard(SwashWindow *self)
                                            "changed",
                                            G_CALLBACK(swash_clipboard_hold_changed),
                                            hold);
-  hold->timeout_id = g_timeout_add_seconds(SWASH_CLIPBOARD_HOLD_TIMEOUT_SECONDS,
-                                           swash_clipboard_hold_timeout,
-                                           hold);
+  g_object_set_data(G_OBJECT(clipboard), SWASH_CLIPBOARD_HOLD_KEY, hold);
   g_application_hold(hold->application);
 
   gtk_window_destroy(GTK_WINDOW(self));
@@ -2319,6 +2379,9 @@ swash_window_clipboard_store_ready(GObject      *source_object,
   SwashWindow *self = SWASH_WINDOW(user_data);
   g_autoptr(GError) error = NULL;
 
+  self->clipboard_store_in_progress = FALSE;
+  gtk_widget_set_sensitive(GTK_WIDGET(self), TRUE);
+
   /* Storing hands the content to a clipboard manager that owns it from then
    * on, which is exactly what closing needs — but only X11 has the protocol
    * for it, and only when such a manager runs. Everywhere else this fails
@@ -2329,11 +2392,41 @@ swash_window_clipboard_store_ready(GObject      *source_object,
     return;
   }
 
-  if (!g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
-    g_debug("Clipboard store failed: %s", error->message);
-
-  swash_window_close_holding_clipboard(self);
+  if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED))
+    swash_window_close_holding_clipboard(self);
+  else
+    swash_window_show_error(self, error->message);
   g_object_unref(self);
+}
+
+static gboolean
+swash_window_close_requested(GtkWindow *window,
+                             gpointer   user_data)
+{
+  SwashWindow *self = SWASH_WINDOW(window);
+  GdkClipboard *clipboard = gtk_widget_get_clipboard(GTK_WIDGET(self));
+
+  (void) user_data;
+
+  if (self->copy_in_progress) {
+    self->close_pending = TRUE;
+    return TRUE;
+  }
+  if (self->clipboard_store_in_progress)
+    return TRUE;
+  if (gdk_clipboard_get_content(clipboard) == NULL)
+    return FALSE;
+
+  if (swash_window_is_wayland(self)) {
+    swash_window_close_holding_clipboard(self);
+  } else {
+    self->clipboard_store_in_progress = TRUE;
+    gtk_widget_set_sensitive(GTK_WIDGET(self), FALSE);
+    gdk_clipboard_store_async(clipboard, G_PRIORITY_DEFAULT, NULL,
+                              swash_window_clipboard_store_ready,
+                              g_object_ref(self));
+  }
+  return TRUE;
 }
 
 static void
@@ -2375,7 +2468,7 @@ swash_window_save_export_ready(GObject      *source_object,
 
   swash_window_mark_saved(self);
   if (operation->close_after_save) {
-    gtk_window_destroy(GTK_WINDOW(self));
+    gtk_window_close(GTK_WINDOW(self));
     swash_save_operation_free(operation);
     return;
   }
@@ -2707,7 +2800,7 @@ swash_window_close_window_action(GtkWidget  *widget,
   (void) action_name;
   (void) parameter;
 
-  gtk_window_destroy(GTK_WINDOW(widget));
+  gtk_window_close(GTK_WINDOW(widget));
 }
 
 static void
@@ -3442,6 +3535,7 @@ swash_window_activate_tool_button(SwashWindow *self)
 static void
 swash_window_init(SwashWindow *self)
 {
+  g_signal_connect(self, "close-request", G_CALLBACK(swash_window_close_requested), NULL);
   swash_window_init_state(self);
   swash_window_ensure_icons_registered();
 

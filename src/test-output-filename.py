@@ -169,7 +169,8 @@ def run_tests(binary, root):
         remote("-", "--name", "dialog-only.png", data=png)
         time.sleep(1.6)
         key(window, "ctrl+s")
-        dialogs = wait_for(lambda: [w for w in windows(process) if w != window],
+        dialogs = wait_for(lambda: [w for w in windows(process)
+                                    if w != window and xdo("getwindowname", w) == "Save image"],
                            "ordinary save dialog")
         key(dialogs[-1], "Escape")
         wait_for(lambda: len(windows(process)) == 1, "cancelled save dialog")
@@ -179,10 +180,10 @@ def run_tests(binary, root):
         assert edited.read_bytes() == previous_output
 
         # Reject ambiguous or empty destinations without changing the document.
-        assert b"--output-filename requires" in remote(
-            "--output-filename", "unused.png", success=False).stderr
-        assert b"--output-filename requires" in remote(
-            source.name, "--output-filename=", success=False).stderr
+        rejected = remote("--output-filename", "unused.png", success=False)
+        assert b"--output-filename requires" in rejected.stderr, (rejected.stderr.decode(), process.poll())
+        rejected = remote(source.name, "--output-filename=", success=False)
+        assert b"--output-filename requires" in rejected.stderr, (rejected.stderr.decode(), process.poll())
         assert not (caller / "unused.png").exists()
         key(window, "ctrl+q")
         assert process.wait(timeout=10) == 0

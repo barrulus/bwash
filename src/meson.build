@@ -2,11 +2,12 @@ swash_conf = configuration_data()
 swash_conf.set_quoted('SWASH_VERSION', meson.project_version())
 
 swash_sources = files(
-  'main.c',
   'canvas-input.c',
   'canvas-layout.c',
   'canvas-render.c',
   'canvas-state.c',
+  'clipboard.c',
+  'clipboard.h',
   'document.c',
   'document.h',
   'editor-utils.c',
@@ -33,6 +34,7 @@ configure_file(
 
 swash_executable = executable(
   'swash',
+  'main.c',
   swash_sources,
   swash_resources,
   dependencies: [gtk_dep, adw_dep, m_dep],
@@ -51,10 +53,27 @@ editor_utils_test = executable(
 
 test('editor-utils', editor_utils_test)
 
+clipboard_test = executable('test-clipboard',
+  ['test-clipboard.c', 'clipboard.c'],
+  dependencies: [gtk_dep],
+)
+test('clipboard-helper', clipboard_test, timeout: 30)
+
+clipboard_ocr_test = executable('test-clipboard-ocr',
+  'test-clipboard-ocr.c', swash_sources, swash_resources,
+  dependencies: [gtk_dep, adw_dep, m_dep],
+)
+
 python = find_program('python3', required: false)
 if python.found()
   test('output-filename', python,
     args: [files('test-output-filename.py'), swash_executable],
+    timeout: 120,
+    # xvfb-run's automatic display selection races between concurrent runs.
+    is_parallel: false,
+  )
+  test('clipboard-wayland', python,
+    args: [files('test-clipboard-wayland.py'), swash_executable, clipboard_ocr_test],
     timeout: 120,
   )
 endif

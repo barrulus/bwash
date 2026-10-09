@@ -38,7 +38,9 @@ Required dependencies:
 - libadwaita 1.6 or newer
 - A C compiler such as GCC or Clang
 
-Tesseract is optional and enables OCR support.
+Tesseract is optional and enables OCR support. On Wayland, install
+`wl-clipboard` to let copied images outlive the editor process. The Nix package
+already includes it.
 
 Configure, build, and install Swash into `/usr/local`:
 
@@ -105,6 +107,21 @@ available and does not change the supplied destination. Opening another image
 clears that destination. Without `--output-filename`, existing save behavior
 is unchanged.
 
+### Clipboard persistence
+
+On Wayland, image copying hands PNG data to `wl-copy`, which keeps it available
+after Swash exits, until the clipboard is replaced or cleared. No clipboard
+history service is needed. Close after copy waits for this handoff to succeed;
+if it fails, an error appears and the editor stays open so you can retry.
+Closing or quitting during a copy also waits for its result.
+
+If `wl-copy` is unavailable, Swash uses GTK and keeps an invisible process
+alive while it owns the clipboard. This fallback has no expiry and releases
+its ownership resources when the clipboard is replaced or cleared. OCR text
+copying retains GTK's text formats and uses the same persistence on close.
+Other display backends use GTK clipboard storage where available, with the
+invisible process as a fallback.
+
 ## Tests
 
 ```bash
@@ -116,6 +133,25 @@ The Nix development shell includes the GUI test dependencies. Outside Nix,
 the `output-filename` test needs Python 3 with Pillow, `xdotool`, `xvfb-run`,
 and `dbus-run-session`; it reports a skip if these are unavailable. It uses
 an isolated display, session bus, and temporary settings directory.
+
+The `clipboard-helper` test covers binary transfer, helper failure, and a
+stalled handoff. The optional `clipboard-wayland` test uses a separate,
+headless Umbriel session with no clipboard history service. It checks image
+and OCR text pasting after close, failure recovery, and ownership release.
+Set `BWASH_TEST_COMPOSITOR` to the Umbriel executable and `BWASH_TEST_INPUT`
+to its built `tests/pointer-client` helper to enable it:
+
+```bash
+nix develop --command env \
+  BWASH_TEST_COMPOSITOR=/path/to/umbriel \
+  BWASH_TEST_INPUT=/path/to/umbriel/build-debug/tests/pointer-client \
+  meson test -C build clipboard-wayland --print-errorlogs
+```
+
+For a real-time check beyond the former ten-minute expiry, also set
+`BWASH_CLIPBOARD_SOAK_SECONDS=610` and pass `--timeout-multiplier 6` to Meson.
+Repeat with `BWASH_CLIPBOARD_SOAK_FALLBACK=1` to exercise GTK retention without
+the helper. These tests use synthetic images and their own clipboard.
 
 ## Acknowledgements
 

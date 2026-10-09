@@ -163,6 +163,9 @@ struct _SwashWindow {
   gint64 auto_copy_last_claim;
   gint64 clipboard_claim_cost;
   gboolean auto_copy_pending;
+  gboolean copy_in_progress;
+  gboolean close_pending;
+  gboolean clipboard_store_in_progress;
   guint ocr_generation;
   gboolean ocr_running;
   double last_draw_x;

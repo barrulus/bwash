@@ -99,11 +99,18 @@ quit_action(GSimpleAction *action,
             gpointer       user_data)
 {
   GApplication *app = G_APPLICATION(user_data);
+  g_autoptr(GPtrArray) windows = g_ptr_array_new_with_free_func(g_object_unref);
 
   (void) action;
   (void) parameter;
 
-  g_application_quit(app);
+  /* Closing each editor allows in-flight copies and clipboard ownership to
+   * finish. A GTK clipboard fallback may keep the process alive invisibly. */
+  for (GList *item = gtk_application_get_windows(GTK_APPLICATION(app));
+       item != NULL; item = item->next)
+    g_ptr_array_add(windows, g_object_ref(item->data));
+  for (guint i = 0; i < windows->len; i++)
+    gtk_window_close(GTK_WINDOW(g_ptr_array_index(windows, i)));
 }
 
 static void
