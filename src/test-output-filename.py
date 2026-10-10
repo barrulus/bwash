@@ -21,7 +21,7 @@ def wait_for(predicate, description):
     raise AssertionError(f"Timed out waiting for {description}")
 
 
-def run_tests(binary, root):
+def run_tests(binary, chooser_binary, root):
     from PIL import Image
 
     config = root / "config" / "swash"
@@ -68,7 +68,8 @@ def run_tests(binary, root):
             with Image.open(path) as result:
                 result.load()
                 return result.size == size
-        except (FileNotFoundError, OSError):
+        except (FileNotFoundError, OSError, SyntaxError):
+            # A background export may still be writing the PNG chunks.
             return False
 
     def launch(*args, data=None):
@@ -88,6 +89,14 @@ def run_tests(binary, root):
         )
         assert (result.returncode == 0) == success, result.stderr.decode()
         return result
+
+    def remote_window(process, *args, data=None):
+        existing = set(windows(process))
+        remote(*args, data=data)
+        opened = wait_for(lambda: set(windows(process)) - existing, "independent editor")
+        assert len(opened) == 1
+        assert existing <= set(windows(process))
+        return opened.pop()
 
     def stop(process):
         if process.poll() is None:
@@ -136,8 +145,10 @@ def run_tests(binary, root):
             assert result.convert("RGB").tobytes() != image.tobytes()
 
         # A second invocation must use its own cwd, not the server's cwd.
-        remote("--stdin", "--name", "remote.png", "--output-filename",
-               "remote output.png", data=png)
+        original_window = window
+        annotated = output.read_bytes()
+        window = remote_window(process, "--stdin", "--name", "remote.png", "--output-filename",
+                               "remote output.png", data=png)
         remote_output = caller / "remote output.png"
         assert not remote_output.exists()
         time.sleep(1.6)
@@ -145,8 +156,25 @@ def run_tests(binary, root):
         wait_for(lambda: saved(remote_output, (64, 48)), "remote stdin save")
         assert not (root / "remote output.png").exists()
 
+        # The first capture keeps its own edits, history and destination.
+        assert output.read_bytes() == annotated
+        key(original_window, "ctrl+z")  # Undo only the annotation.
+        key(original_window, "ctrl+s")
+        wait_for(lambda: saved(output, (48, 64)) and output.read_bytes() != annotated,
+                 "first capture undo and save after second capture")
+        with Image.open(output) as result:
+            assert result.convert("RGB").tobytes() == image.tobytes()
+        assert saved(remote_output, (64, 48))
+        key(original_window, "ctrl+shift+z")
+        time.sleep(1.6)
+        key(original_window, "ctrl+s")
+        wait_for(lambda: output.read_bytes() == annotated, "first capture redo retained")
+        key(window, "ctrl+z")  # A fresh capture has no undo history.
+        key(window, "ctrl+s")
+        assert saved(remote_output, (64, 48))
+
         # File input and output stay separate, including repeated saves.
-        remote(source.name, "--output-filename", "edited file.png")
+        window = remote_window(process, source.name, "--output-filename", "edited file.png")
         edited = caller / "edited file.png"
         time.sleep(1.6)
         key(window, "ctrl+r")
@@ -154,10 +182,10 @@ def run_tests(binary, root):
         wait_for(lambda: saved(edited, (48, 64)), "file input export")
         assert source.read_bytes() == png
 
-        # Opening without the option clears the previous destination and
+        # Opening without the option gets an independent destination and
         # preserves ordinary in-place saves for file input.
         previous_output = edited.read_bytes()
-        remote(source.name)
+        window = remote_window(process, source.name)
         time.sleep(1.6)
         key(window, "ctrl+r")
         key(window, "ctrl+s")
@@ -166,14 +194,15 @@ def run_tests(binary, root):
 
         # Stdin without a destination still asks where to save. Cancelling
         # the dialog keeps the document open and creates no image.
-        remote("-", "--name", "dialog-only.png", data=png)
+        window = remote_window(process, "-", "--name", "dialog-only.png", data=png)
         time.sleep(1.6)
+        editors = set(windows(process))
         key(window, "ctrl+s")
         dialogs = wait_for(lambda: [w for w in windows(process)
                                     if w != window and xdo("getwindowname", w) == "Save image"],
                            "ordinary save dialog")
         key(dialogs[-1], "Escape")
-        wait_for(lambda: len(windows(process)) == 1, "cancelled save dialog")
+        wait_for(lambda: set(windows(process)) == editors, "cancelled save dialog")
         assert process.poll() is None
         assert not (root / "dialog-only.png").exists()
         assert not (caller / "dialog-only.png").exists()
@@ -185,8 +214,79 @@ def run_tests(binary, root):
         rejected = remote(source.name, "--output-filename=", success=False)
         assert b"--output-filename requires" in rejected.stderr, (rejected.stderr.decode(), process.poll())
         assert not (caller / "unused.png").exists()
+
+        # Invalid input must neither replace a document nor leak an empty window.
+        remote("--stdin", data=b"not an image", success=False)
+        remote("missing-image.png", success=False)
+        assert set(windows(process)) == editors
+        assert output.read_bytes() == annotated
+
+        # Ctrl+O from an edited document opens separately. Cancelling Open
+        # changes nothing.
+        key(original_window, "ctrl+o")
+        dialog = wait_for(lambda: [w for w in windows(process)
+                                  if xdo("getwindowname", w) == "Open image"], "open dialog")[0]
+        key(dialog, "Escape")
+        wait_for(lambda: set(windows(process)) == editors, "cancelled open dialog")
+        key(original_window, "ctrl+r")  # Leave unsaved work in the first editor.
+
+        # Desktop Open requests can contain several files; none may be dropped.
+        subprocess.run([
+            "gdbus", "call", "--session", "--dest", "dev.lemmy.swash",
+            "--object-path", "/dev/lemmy/swash", "--method", "org.gtk.Application.Open",
+            "['" + source.as_uri() + "', '" + output.as_uri() + "']", "", "{}",
+        ], check=True, capture_output=True, timeout=10)
+        wait_for(lambda: len(set(windows(process)) - editors) == 2,
+                 "desktop request opened both files")
+        assert editors <= set(windows(process))
+        key(original_window, "ctrl+s")
+        wait_for(lambda: saved(output, (64, 48)), "unsaved original survived Open")
+        remote()  # Launching with no image only presents an existing editor.
+        assert len(set(windows(process)) - editors) == 2
+
         key(window, "ctrl+q")
         assert process.wait(timeout=10) == 0
+    finally:
+        stop(process)
+
+    # Exercise the actual native chooser callback, including empty-window reuse.
+    subprocess.run([chooser_binary, str(source)], check=True, timeout=15)
+
+    # Start two exports in different editors. A slow PNG gives the first worker
+    # time to overlap another capture; close-after-save must close only its own
+    # window, and later errors must stay attached to the second document.
+    settings.write_text("[preferences]\nclose_after_save=true\n")
+    large_image = Image.effect_noise((3072, 2048), 100).convert("RGB")
+    large_stream = io.BytesIO()
+    large_image.save(large_stream, format="PNG")
+    first_export = root / "large-export.png"
+    second_export = root / "pending-parent" / "second-export.png"
+    process = launch("--stdin", "--output-filename", first_export, data=large_stream.getvalue())
+    try:
+        first = wait_for(lambda: windows(process), "large capture editor")[0]
+        # Open the second capture before exporting so the application stays
+        # alive even on machines where the first export completes immediately.
+        second = remote_window(process, "--stdin", "--output-filename", second_export, data=png)
+        key(first, "ctrl+s")
+        remote("--stdin", "--name", "during-export.png", data=png)
+        third = wait_for(lambda: [w for w in windows(process) if w not in (first, second)],
+                         "capture received during export")[0]
+        key(third, "Escape")
+        key(second, "ctrl+s")
+        wait_for(lambda: saved(first_export, large_image.size), "first independent export")
+        wait_for(lambda: first not in windows(process), "first editor closed after save")
+        assert second in windows(process)
+        assert not second_export.exists()
+        with Image.open(first_export) as result:
+            assert result.convert("RGB").tobytes() == large_image.tobytes()
+        errors = wait_for(lambda: [w for w in windows(process) if w != second],
+                          "second export error retained")
+        key(errors[-1], "Escape")
+        wait_for(lambda: windows(process) == [second], "second editor retained")
+        second_export.parent.mkdir()
+        key(second, "ctrl+s")
+        assert process.wait(timeout=10) == 0
+        assert saved(second_export, image.size)
     finally:
         stop(process)
 
@@ -218,12 +318,12 @@ def run_tests(binary, root):
                 failed.parent.chmod(0o700)
 
     print("PASS: direct saves, edited pixels, overwrite, cancellation, caller cwd,")
-    print("      source preservation, destination reset, CLI errors, save failure/retry")
+    print("      independent documents/history/exports, file chooser, CLI errors, save failure/retry")
 
 
 if __name__ == "__main__":
     if "--inside" not in sys.argv:
-        missing = [tool for tool in ("dbus-run-session", "xvfb-run", "xdotool")
+        missing = [tool for tool in ("dbus-run-session", "xvfb-run", "xdotool", "gdbus")
                    if shutil.which(tool) is None]
         try:
             import PIL  # noqa: F401
@@ -254,10 +354,11 @@ if __name__ == "__main__":
                 "xvfb-run", "-a", "-s",
                 "-screen 0 1280x1024x24", sys.executable,
                 __file__, "--inside", str(Path(sys.argv[1]).resolve()),
+                str(Path(sys.argv[2]).resolve()),
             ], stdout=log, stderr=subprocess.STDOUT, timeout=90)
             log.seek(0)
             print(log.read(), end="", flush=True)
         sys.exit(result.returncode)
 
     with tempfile.TemporaryDirectory(prefix="bwash-output-test-") as directory:
-        run_tests(sys.argv[2], Path(directory))
+        run_tests(sys.argv[2], sys.argv[3], Path(directory))

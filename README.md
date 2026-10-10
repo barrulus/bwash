@@ -103,9 +103,24 @@ Saving replaces an existing destination without an overwrite prompt. The
 input file is kept separate and is only overwritten if you explicitly choose
 it as the destination. The filename extension selects the export format, as
 with ordinary saves; unknown extensions use PNG. “Save as copy” remains
-available and does not change the supplied destination. Opening another image
-clears that destination. Without `--output-filename`, existing save behavior
-is unchanged.
+available and does not change the supplied destination. Each editor keeps its
+own destination. Without `--output-filename`, existing save behavior is unchanged.
+
+### Independent captures
+
+Each incoming image opens in a separate editor, including file arguments,
+images piped to stdin, and files opened from the desktop. Each editor keeps
+its own image, annotations, undo/redo history, and save destination. Opening a
+second capture leaves the first available, including while it is saving.
+
+“Open image” (Ctrl+O) also opens a separate editor when the current editor
+already contains an image, preserving unsaved work. An empty editor can load
+the selected file directly. Cancelling the chooser or selecting an invalid
+image leaves existing documents unchanged.
+
+Escape closes the current editor when “Escape closes window” is enabled.
+Close after save and close after copy apply to that editor; Ctrl+Q quits all
+editors. Launching Swash without an image presents an existing editor.
 
 ### Clipboard persistence
 
@@ -131,8 +146,10 @@ nix develop --command meson test -C build --print-errorlogs
 
 The Nix development shell includes the GUI test dependencies. Outside Nix,
 the `output-filename` test needs Python 3 with Pillow, `xdotool`, `xvfb-run`,
-and `dbus-run-session`; it reports a skip if these are unavailable. It uses
-an isolated display, session bus, and temporary settings directory.
+`gdbus`, and `dbus-run-session`; it reports a skip if these are unavailable. It uses
+an isolated display, session bus, and temporary settings directory. It also
+checks independent captures, undo/redo, file chooser behavior, and separate
+exports with close after save.
 
 The `clipboard-helper` test covers binary transfer, helper failure, and a
 stalled handoff. The optional `clipboard-wayland` test uses a separate,

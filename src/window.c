@@ -2969,6 +2969,8 @@ swash_window_open_ready(GObject      *source_object,
   g_autoptr(GError) error = NULL;
   g_autoptr(GFile) file = NULL;
   SwashWindow *self = SWASH_WINDOW(user_data);
+  GtkApplication *application;
+  SwashWindow *target;
 
   file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source_object), result, &error);
 
@@ -2980,8 +2982,22 @@ swash_window_open_ready(GObject      *source_object,
     return;
   }
 
-  if (!swash_window_open_file(self, file, &error))
+  application = gtk_window_get_application(GTK_WINDOW(self));
+  if (application == NULL) {
+    g_object_unref(self);
+    return;
+  }
+
+  /* Opening a file must preserve even an unedited stdin capture and any
+   * asynchronous export. Only a truly empty editor can be reused. */
+  target = self->texture == NULL ? self : swash_window_new(ADW_APPLICATION(application));
+  if (!swash_window_open_file(target, file, &error)) {
+    if (target != self)
+      gtk_window_destroy(GTK_WINDOW(target));
     swash_window_show_error(self, error->message);
+  } else {
+    gtk_window_present(GTK_WINDOW(target));
+  }
 
   g_object_unref(self);
 }

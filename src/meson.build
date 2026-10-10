@@ -66,8 +66,13 @@ clipboard_ocr_test = executable('test-clipboard-ocr',
 
 python = find_program('python3', required: false)
 if python.found()
+  open_dialog_test = executable('test-open-dialog',
+    'test-open-dialog.c', swash_sources, swash_resources,
+    dependencies: [gtk_dep, adw_dep, m_dep],
+    c_args: ['-Wno-deprecated-declarations'],
+  )
   test('output-filename', python,
-    args: [files('test-output-filename.py'), swash_executable],
+    args: [files('test-output-filename.py'), swash_executable, open_dialog_test],
     timeout: 120,
     # xvfb-run's automatic display selection races between concurrent runs.
     is_parallel: false,

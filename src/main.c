@@ -87,10 +87,16 @@ app_get_or_create_window(AdwApplication *app)
 {
   GtkWindow *window = gtk_application_get_active_window(GTK_APPLICATION(app));
 
-  if (window == NULL)
-    window = GTK_WINDOW(swash_window_new(app));
+  if (SWASH_IS_WINDOW(window))
+    return SWASH_WINDOW(window);
 
-  return SWASH_WINDOW(window);
+  /* The active window may be a preferences or dialog window. */
+  for (GList *item = gtk_application_get_windows(GTK_APPLICATION(app));
+       item != NULL; item = item->next)
+    if (SWASH_IS_WINDOW(item->data))
+      return SWASH_WINDOW(item->data);
+
+  return swash_window_new(app);
 }
 
 static void
@@ -145,20 +151,20 @@ app_open(GApplication  *app,
          const char    *hint,
          gpointer       user_data)
 {
-  SwashWindow *window;
-  g_autoptr(GError) error = NULL;
-
   (void) hint;
   (void) user_data;
 
-  window = app_get_or_create_window(ADW_APPLICATION(app));
+  for (int i = 0; i < n_files; i++) {
+    g_autoptr(GError) error = NULL;
+    SwashWindow *window = swash_window_new(ADW_APPLICATION(app));
 
-  if (n_files > 0 && files[0] != NULL && !swash_window_open_file(window, files[0], &error)) {
-    g_printerr("Error loading image: %s\n", error->message);
-    return;
+    if (!swash_window_open_file(window, files[i], &error)) {
+      g_printerr("Error loading image: %s\n", error->message);
+      gtk_window_destroy(GTK_WINDOW(window));
+      continue;
+    }
+    gtk_window_present(GTK_WINDOW(window));
   }
-
-  gtk_window_present(GTK_WINDOW(window));
 }
 
 static int
@@ -239,7 +245,11 @@ app_command_line(GApplication            *app,
     output_file = g_application_command_line_create_file_for_arg(command_line, output_filename);
   }
 
-  window = app_get_or_create_window(ADW_APPLICATION(app));
+  /* A populated editor is never a target for another incoming document.
+   * Its pending exports, undo history and destination belong to that window. */
+  window = use_stdin || file != NULL
+    ? swash_window_new(ADW_APPLICATION(app))
+    : app_get_or_create_window(ADW_APPLICATION(app));
 
   if (use_stdin) {
     g_autoptr(GBytes) bytes = NULL;
@@ -249,6 +259,7 @@ app_command_line(GApplication            *app,
       g_application_command_line_printerr(command_line,
                                           "Error loading image from stdin: %s\n",
                                           error->message);
+      gtk_window_destroy(GTK_WINDOW(window));
       status = 1;
       goto done;
     }
@@ -258,6 +269,7 @@ app_command_line(GApplication            *app,
                                           "Error loading image '%s': %s\n",
                                           arguments[1],
                                           error->message);
+      gtk_window_destroy(GTK_WINDOW(window));
       status = 1;
       goto done;
     }
