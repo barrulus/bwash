@@ -21,7 +21,7 @@ def wait_for(predicate, description):
     raise AssertionError(f"Timed out waiting for {description}")
 
 
-def run_tests(binary, chooser_binary, root):
+def run_tests(binary, chooser_binary, finish_binary, root):
     from PIL import Image
 
     config = root / "config" / "swash"
@@ -317,6 +317,9 @@ def run_tests(binary, chooser_binary, root):
             if failed.parent.exists():
                 failed.parent.chmod(0o700)
 
+    settings.write_text("[preferences]\nshortcut_finish=Return\nclose_after_copy=true\nclose_after_save=true\n")
+    subprocess.run([finish_binary, str(source), str(root / "finish.png")], check=True, timeout=15)
+
     print("PASS: direct saves, edited pixels, overwrite, cancellation, caller cwd,")
     print("      independent documents/history/exports, file chooser, CLI errors, save failure/retry")
 
@@ -355,10 +358,11 @@ if __name__ == "__main__":
                 "-screen 0 1280x1024x24", sys.executable,
                 __file__, "--inside", str(Path(sys.argv[1]).resolve()),
                 str(Path(sys.argv[2]).resolve()),
+                str(Path(sys.argv[3]).resolve()),
             ], stdout=log, stderr=subprocess.STDOUT, timeout=90)
             log.seek(0)
             print(log.read(), end="", flush=True)
         sys.exit(result.returncode)
 
     with tempfile.TemporaryDirectory(prefix="bwash-output-test-") as directory:
-        run_tests(sys.argv[2], sys.argv[3], Path(directory))
+        run_tests(sys.argv[2], sys.argv[3], sys.argv[4], Path(directory))

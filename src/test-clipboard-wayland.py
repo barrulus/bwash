@@ -78,19 +78,23 @@ def check(binary, ocr_binary, root):
     image.save(stream, format="PNG")
     png = stream.getvalue()
 
-    def paste_image():
+    def paste_image(expected=None):
+        expected = image if expected is None else expected
         result = subprocess.run(["wl-paste", "--no-newline", "--type", "image/png"],
                                 capture_output=True, timeout=10)
         if result.returncode:
             return False
         with Image.open(io.BytesIO(result.stdout)) as pasted:
-            return pasted.size == image.size and pasted.convert("RGB").tobytes() == image.tobytes()
+            return pasted.size == expected.size and pasted.convert("RGB").tobytes() == expected.tobytes()
 
     def clear():
         run(["wl-copy", "--clear"])
 
-    def launch(env=None):
-        process = spawn([binary, "--stdin", "--name", "clipboard.png"],
+    def launch(env=None, output=None):
+        args = [binary, "--stdin", "--name", "clipboard.png"]
+        if output is not None:
+            args += ["--output-filename", str(output)]
+        process = spawn(args,
                         stdin=subprocess.PIPE, env=env)
         process.stdin.write(png)
         process.stdin.close()
@@ -195,6 +199,88 @@ def check(binary, ocr_binary, root):
         clear()
         assert process.wait(timeout=10) == 0
 
+        # Combined action must override early-close preferences without changing
+        # ordinary copy/save behavior, and preserve the copied pixels on disk.
+        finish_settings = ("[preferences]\nshortcut_finish=Return\n"
+                           "close_after_copy=true\nclose_after_save=true\n")
+        settings.write_text(finish_settings)
+        output = root / "combined.png"
+        process = launch(output=output)
+        key(28)  # Enter, explicitly configured as Finish.
+        assert process.wait(timeout=10) == 0
+        assert paste_image()
+        with Image.open(output) as saved:
+            assert saved.size == image.size and saved.convert("RGB").tobytes() == image.tobytes()
+        clear()
+        print("PASS: combined copy, save, close with both close preferences enabled", flush=True)
+
+        # With ordinary close preferences off, Finish still closes. The native
+        # Wayland fallback must retain its input serial despite pausing edits.
+        settings.write_text("[preferences]\nshortcut_finish=Return\n")
+        output = root / "combined-native.png"
+        process = launch(no_helper, output)
+        key(28)
+        wait_for(lambda: not windows(), "combined GTK fallback closed")
+        assert output.exists() and paste_image() and process.poll() is None
+        clear()
+        assert process.wait(timeout=10) == 0
+        settings.write_text(finish_settings)
+
+        # Failed handoff must never begin saving. Retrying uses the same editor.
+        fake.write_text(f"#!{shell}\n{shutil.which('cat')} >/dev/null\nexit 1\n")
+        fake.chmod(0o700)
+        output = root / "copy-failure.png"
+        process = launch(failure_env, output)
+        key(28)
+        wait_for(lambda: len(windows()) >= 2, "combined copy error")
+        assert process.poll() is None and not output.exists()
+        key(1)
+        wait_for(lambda: len(windows()) == 1, "combined editor usable after copy error")
+        fake.unlink()
+        key(28)
+        assert process.wait(timeout=10) == 0
+        assert output.exists() and paste_image()
+        clear()
+
+        # Save failure follows a successful copy and keeps the document open.
+        output = root / "missing-parent" / "save-failure.png"
+        process = launch(output=output)
+        key(28)
+        wait_for(lambda: len(windows()) >= 2, "combined save error")
+        assert process.poll() is None and not output.exists() and paste_image()
+        key(1)
+        wait_for(lambda: len(windows()) == 1, "combined editor usable after save error")
+        output.parent.mkdir()
+        key(28)
+        assert process.wait(timeout=10) == 0
+        assert output.exists()
+        clear()
+
+        # Wait for an existing auto-copy, then copy the frozen latest document
+        # before saving. A slow helper makes the overlap deterministic.
+        real_helper = shutil.which("wl-copy")
+        calls = root / "copy-calls"
+        fake.write_text(f'#!{shell}\necho copy >> {calls}\n'
+                        f'{shutil.which("sleep")} 0.5\nexec {real_helper} "$@"\n')
+        fake.chmod(0o700)
+        settings.write_text(finish_settings + "auto_copy_latest_change=true\nshortcut_rotate=<Primary>r\n")
+        output = root / "auto-copy-finish.png"
+        process = launch(failure_env, output)
+        key(19, "control")  # Rotate, starting auto-copy.
+        wait_for(calls.exists, "auto-copy started before Finish")
+        key(28)
+        assert not output.exists()
+        assert process.wait(timeout=10) == 0
+        assert len(calls.read_text().splitlines()) == 2
+        rotated = image.transpose(Image.Transpose.ROTATE_90)
+        assert paste_image(rotated)
+        with Image.open(output) as saved:
+            assert saved.size == rotated.size and saved.convert("RGB").tobytes() == rotated.tobytes()
+        fake.unlink()
+        clear()
+        print("PASS: combined failures/retries and auto-copy ordering", flush=True)
+
+        settings.write_text("[preferences]\nclose_after_copy=true\n")
         # Optional real-time check beyond the old ten-minute expiry.
         fallback_soak = os.environ.get("BWASH_CLIPBOARD_SOAK_FALLBACK") == "1"
         process = launch(no_helper if fallback_soak else None)

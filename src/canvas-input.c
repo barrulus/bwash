@@ -454,6 +454,13 @@ swash_window_global_key_pressed(GtkEventControllerKey *controller,
     return TRUE;
   }
 
+  if (swash_window_shortcut_matches(self, SWASH_SHORTCUT_FINISH, keyval, state)
+      && !(focus != NULL && (GTK_IS_TEXT_VIEW(focus)
+                            || gtk_widget_get_ancestor(focus, GTK_TYPE_TEXT_VIEW) != NULL))) {
+    gtk_widget_activate_action(GTK_WIDGET(self), "win.finish", NULL);
+    return TRUE;
+  }
+
   if (swash_window_shortcut_matches(self, SWASH_SHORTCUT_COPY, keyval, state)) {
     gtk_widget_activate_action(GTK_WIDGET(self), "win.copy-buffer", NULL);
     return TRUE;

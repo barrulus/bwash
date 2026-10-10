@@ -8,6 +8,7 @@ typedef enum {
   SWASH_SHORTCUT_OPEN,
   SWASH_SHORTCUT_SAVE,
   SWASH_SHORTCUT_COPY,
+  SWASH_SHORTCUT_FINISH,
   SWASH_SHORTCUT_UNDO,
   SWASH_SHORTCUT_REDO,
   SWASH_SHORTCUT_ZOOM_IN,
@@ -164,6 +165,9 @@ struct _SwashWindow {
   gint64 clipboard_claim_cost;
   gboolean auto_copy_pending;
   gboolean copy_in_progress;
+  gboolean save_in_progress;
+  gboolean finish_in_progress;
+  gboolean finish_waiting_for_copy;
   gboolean close_pending;
   gboolean clipboard_store_in_progress;
   guint ocr_generation;

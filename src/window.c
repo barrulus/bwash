@@ -73,6 +73,7 @@ static const SwashShortcutInfo swash_shortcut_info[SWASH_SHORTCUT_COUNT] = {
   [SWASH_SHORTCUT_OPEN] = {"open", "Open", "win.open", "<Primary>o", -1},
   [SWASH_SHORTCUT_SAVE] = {"save", "Save", "win.save", "<Primary>s", -1},
   [SWASH_SHORTCUT_COPY] = {"copy", "Copy", "win.copy-buffer", "<Primary>c", -1},
+  [SWASH_SHORTCUT_FINISH] = {"finish", "Copy, save and close", "win.finish", "", -1},
   [SWASH_SHORTCUT_UNDO] = {"undo", "Undo", "win.undo", "<Primary>z", -1},
   [SWASH_SHORTCUT_REDO] = {"redo", "Redo", "win.redo", "<Primary><Shift>z", -1},
   [SWASH_SHORTCUT_ZOOM_IN] = {"zoom_in", "Zoom in", "win.zoom-in", "<Primary>plus", -1},
@@ -224,7 +225,9 @@ swash_window_apply_shortcuts(SwashWindow *self)
   for (int i = 0; i < SWASH_SHORTCUT_COUNT; i++) {
     const char *accelerators[2] = {NULL, NULL};
 
-    if (swash_shortcut_info[i].action == NULL || i == SWASH_SHORTCUT_COPY)
+    /* Copy and Finish are dispatched after text/crop key handling. */
+    if (swash_shortcut_info[i].action == NULL || i == SWASH_SHORTCUT_COPY
+        || i == SWASH_SHORTCUT_FINISH)
       continue;
 
     if (self->shortcut_accels[i] != NULL && *self->shortcut_accels[i] != '\0')
@@ -1659,6 +1662,7 @@ swash_window_maybe_start_ocr(SwashWindow *self)
 
 static void swash_window_save_copy_ready(GObject *source_object, GAsyncResult *result, gpointer user_data);
 static void swash_window_prompt_save(SwashWindow *self, gboolean as_copy);
+static void swash_window_start_save(SwashWindow *self);
 static void swash_window_save_overwrite_action(GtkWidget *widget, const char *action_name, GVariant *parameter);
 static void swash_window_save_copy_action(GtkWidget *widget, const char *action_name, GVariant *parameter);
 static void swash_window_rotate_counter_clockwise_action(GtkWidget *widget, const char *action_name, GVariant *parameter);
@@ -1782,6 +1786,44 @@ swash_window_flash_copy_success(SwashWindow *self)
 }
 
 static void
+swash_window_finish_reset(SwashWindow *self)
+{
+  self->finish_in_progress = FALSE;
+  self->finish_waiting_for_copy = FALSE;
+  self->close_pending = FALSE;
+  self->auto_copy_pending = FALSE;
+  gtk_widget_set_sensitive(GTK_WIDGET(self), TRUE);
+}
+
+static void
+swash_window_finish_action(GtkWidget *widget, const char *action_name, GVariant *parameter)
+{
+  SwashWindow *self = SWASH_WINDOW(widget);
+  GtkWidget *focus = gtk_root_get_focus(GTK_ROOT(self));
+
+  (void) action_name;
+  (void) parameter;
+
+  if (self->texture == NULL || self->finish_in_progress || self->save_in_progress
+      || self->clipboard_store_in_progress || self->drawing || self->text_editing
+      || self->crop_selection_active)
+    return;
+  if (focus != NULL && (GTK_IS_EDITABLE(focus) || GTK_IS_TEXT_VIEW(focus)
+                       || gtk_widget_get_ancestor(focus, GTK_TYPE_TEXT_VIEW) != NULL))
+    return;
+
+  self->finish_in_progress = TRUE;
+  self->finish_waiting_for_copy = self->copy_in_progress;
+  self->auto_copy_pending = FALSE;
+  g_clear_handle_id(&self->auto_copy_throttle_id, g_source_remove);
+  /* Both exports must see the same document, even during the save chooser.
+   * Other capture windows remain usable. */
+  gtk_widget_set_sensitive(GTK_WIDGET(self), FALSE);
+  if (!self->finish_waiting_for_copy)
+    swash_window_trigger_copy(self, TRUE);
+}
+
+static void
 swash_window_copy_completed(SwashWindow *self,
                              gboolean     user_initiated,
                              gboolean     close_after_copy,
@@ -1794,11 +1836,27 @@ swash_window_copy_completed(SwashWindow *self,
   gtk_widget_set_sensitive(GTK_WIDGET(self->copy_button), self->texture != NULL);
 
   if (error != NULL) {
+    gboolean finishing = self->finish_in_progress;
+
     self->auto_copy_pending = FALSE;
-    if (user_initiated || close_pending)
+    if (finishing)
+      swash_window_finish_reset(self);
+    if (user_initiated || close_pending || finishing)
       swash_window_show_error(self, error->message);
     else
       g_warning("Auto-copy failed: %s", error->message);
+    return;
+  }
+
+  if (self->finish_waiting_for_copy) {
+    /* An auto-copy may have started before the latest edit. Copy the frozen
+     * document afresh before saving it. */
+    self->finish_waiting_for_copy = FALSE;
+    swash_window_trigger_copy(self, TRUE);
+    return;
+  }
+  if (self->finish_in_progress) {
+    swash_window_start_save(self);
     return;
   }
 
@@ -1848,9 +1906,11 @@ swash_window_trigger_copy(SwashWindow *self,
   g_autofree char *helper = NULL;
   SwashCopyResult *copy_result;
   gint64 started_at = g_get_monotonic_time();
-  gboolean close_after_copy = user_initiated && self->close_after_copy;
+  gboolean close_after_copy = user_initiated && self->close_after_copy
+                           && !self->finish_in_progress;
 
-  if (self->texture == NULL || self->clipboard_store_in_progress)
+  if (self->texture == NULL || self->clipboard_store_in_progress
+      || (self->finish_in_progress && !user_initiated))
     return;
   if (self->copy_in_progress) {
     self->auto_copy_pending = TRUE;
@@ -1926,7 +1986,8 @@ swash_window_maybe_auto_copy_latest_change(SwashWindow *self)
 {
   guint interval;
 
-  if (!self->auto_copy_latest_change || self->texture == NULL || !swash_window_has_unsaved_changes(self))
+  if (self->finish_in_progress || !self->auto_copy_latest_change
+      || self->texture == NULL || !swash_window_has_unsaved_changes(self))
     return;
 
   self->auto_copy_pending = TRUE;
@@ -2408,6 +2469,9 @@ swash_window_close_requested(GtkWindow *window,
 
   (void) user_data;
 
+  /* A close request cannot bypass a failed or cancelled combined action. */
+  if (self->finish_in_progress)
+    return TRUE;
   if (self->copy_in_progress) {
     self->close_pending = TRUE;
     return TRUE;
@@ -2448,10 +2512,13 @@ swash_window_save_export_ready(GObject      *source_object,
 
   (void) source_object;
 
+  self->save_in_progress = FALSE;
   if (!g_task_propagate_boolean(G_TASK(result), &error)) {
     g_clear_handle_id(&self->save_spinner_timeout_id, g_source_remove);
     g_clear_handle_id(&self->save_feedback_timeout_id, g_source_remove);
     swash_window_reset_save_button(self);
+    if (self->finish_in_progress)
+      swash_window_finish_reset(self);
     swash_window_show_error(self, error->message);
     swash_save_operation_free(operation);
     return;
@@ -2467,6 +2534,9 @@ swash_window_save_export_ready(GObject      *source_object,
   }
 
   swash_window_mark_saved(self);
+  /* Keep a finished editor insensitive until the close request runs, so
+   * queued input cannot change the document after it has been saved. */
+  self->finish_in_progress = FALSE;
   if (operation->close_after_save) {
     gtk_window_close(GTK_WINDOW(self));
     swash_save_operation_free(operation);
@@ -2499,6 +2569,9 @@ swash_window_begin_save_to_file(SwashWindow *self,
                                      swash_document_get_image_generation(self->document),
                                      &error);
   if (request == NULL) {
+    self->save_in_progress = FALSE;
+    if (self->finish_in_progress)
+      swash_window_finish_reset(self);
     swash_window_show_error(self, error->message);
     return;
   }
@@ -2507,7 +2580,8 @@ swash_window_begin_save_to_file(SwashWindow *self,
   operation->window = g_object_ref(self);
   operation->file = g_object_ref(file);
   operation->adopt_file = adopt_file;
-  operation->close_after_save = self->close_after_save;
+  operation->close_after_save = self->finish_in_progress || self->close_after_save;
+  self->save_in_progress = TRUE;
   swash_window_begin_save_feedback(self);
   task = g_task_new(self, NULL, swash_window_save_export_ready, operation);
   g_task_set_task_data(task, request, (GDestroyNotify) swash_export_request_free);
@@ -2526,6 +2600,9 @@ swash_window_save_copy_ready(GObject      *source_object,
 
   file = gtk_file_dialog_save_finish(GTK_FILE_DIALOG(source_object), result, &error);
   if (file == NULL) {
+    self->save_in_progress = FALSE;
+    if (self->finish_in_progress)
+      swash_window_finish_reset(self);
     if (!swash_window_error_is_user_dismissed(error))
       swash_window_show_error(self, error->message);
 
@@ -2549,9 +2626,15 @@ swash_window_save_overwrite_action(GtkWidget  *widget,
   (void) action_name;
   (void) parameter;
 
-  if (self->texture == NULL)
+  if (self->texture == NULL || self->save_in_progress || self->finish_in_progress)
     return;
 
+  swash_window_start_save(self);
+}
+
+static void
+swash_window_start_save(SwashWindow *self)
+{
   if (self->output_file != NULL) {
     swash_window_begin_save_to_file(self, self->output_file, FALSE);
     return;
@@ -2574,6 +2657,7 @@ swash_window_prompt_save(SwashWindow *self,
   g_autofree char *suggested_name = NULL;
   SwashSaveDialog *save_dialog = g_new0(SwashSaveDialog, 1);
 
+  self->save_in_progress = TRUE;
   if (self->current_file != NULL)
     basename = g_file_get_basename(self->current_file);
 
@@ -2600,10 +2684,13 @@ swash_window_save_copy_action(GtkWidget  *widget,
                                  const char *action_name,
                                  GVariant   *parameter)
 {
+  SwashWindow *self = SWASH_WINDOW(widget);
+
   (void) action_name;
   (void) parameter;
 
-  swash_window_prompt_save(SWASH_WINDOW(widget), TRUE);
+  if (!self->save_in_progress && !self->finish_in_progress && self->texture != NULL)
+    swash_window_prompt_save(self, TRUE);
 }
 
 static void
@@ -2772,7 +2859,7 @@ swash_window_copy_action(GtkWidget  *widget,
   (void) action_name;
   (void) parameter;
 
-  if (!gtk_widget_is_sensitive(GTK_WIDGET(self->copy_button)))
+  if (self->finish_in_progress || !gtk_widget_is_sensitive(GTK_WIDGET(self->copy_button)))
     return;
 
   gtk_widget_activate(GTK_WIDGET(self->copy_button));
@@ -3290,6 +3377,7 @@ swash_window_install_actions(GtkWidgetClass *widget_class)
   gtk_widget_class_install_action(widget_class, "win.copy-buffer", NULL, swash_window_copy_action);
   gtk_widget_class_install_action(widget_class, "win.dismiss", NULL, swash_window_dismiss_action);
   gtk_widget_class_install_action(widget_class, "win.close-window", NULL, swash_window_close_window_action);
+  gtk_widget_class_install_action(widget_class, "win.finish", NULL, swash_window_finish_action);
   gtk_widget_class_install_action(widget_class, "win.save", NULL, swash_window_save_overwrite_action);
   gtk_widget_class_install_action(widget_class, "win.save-copy", NULL, swash_window_save_copy_action);
   gtk_widget_class_install_action(widget_class, "win.rotate-counter-clockwise", NULL, swash_window_rotate_counter_clockwise_action);

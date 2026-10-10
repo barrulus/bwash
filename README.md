@@ -122,6 +122,34 @@ Escape closes the current editor when “Escape closes window” is enabled.
 Close after save and close after copy apply to that editor; Ctrl+Q quits all
 editors. Launching Swash without an image presents an existing editor.
 
+### Copy, save and close
+
+In **Preferences → Shortcuts**, assign a key to **Copy, save and close**.
+It has no shortcut by default. For example, assigning Enter corresponds to
+this setting in `$XDG_CONFIG_HOME/swash/settings.ini`:
+
+```ini
+[preferences]
+shortcut_finish=Return
+```
+
+The action copies the image, waits for the copy to succeed, saves to the
+editor's destination (or asks for one), and closes only after saving succeeds.
+A failed copy or save, or a cancelled save chooser, leaves the editor open
+and ready to retry. The clipboard may already contain the image if saving
+fails or is cancelled.
+
+The editor pauses editing during the sequence so the copied and saved image
+match; other capture windows remain usable. Existing close-after-copy and
+close-after-save preferences still govern ordinary actions. During the
+combined action, they cannot close the editor before the save completes.
+An auto-copy already in progress is allowed to finish before the combined
+action copies the latest document.
+
+Enter retains its normal behavior when editing text or applying a pending
+crop. Finish does not run while a drawing, text edit, crop, or another save
+is in progress.
+
 ### Clipboard persistence
 
 On Wayland, image copying hands PNG data to `wl-copy`, which keeps it available
@@ -149,12 +177,16 @@ the `output-filename` test needs Python 3 with Pillow, `xdotool`, `xvfb-run`,
 `gdbus`, and `dbus-run-session`; it reports a skip if these are unavailable. It uses
 an isolated display, session bus, and temporary settings directory. It also
 checks independent captures, undo/redo, file chooser behavior, and separate
-exports with close after save.
+exports with close after save. Native GTK fixtures cover file chooser
+selection and the combined action's cancellation, retry, and text/crop key
+handling.
 
 The `clipboard-helper` test covers binary transfer, helper failure, and a
 stalled handoff. The optional `clipboard-wayland` test uses a separate,
 headless Umbriel session with no clipboard history service. It checks image
 and OCR text pasting after close, failure recovery, and ownership release.
+It also checks combined-action ordering, copy/save failures, retries, and
+interaction with auto-copy.
 Set `BWASH_TEST_COMPOSITOR` to the Umbriel executable and `BWASH_TEST_INPUT`
 to its built `tests/pointer-client` helper to enable it:
 

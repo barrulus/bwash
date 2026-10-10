@@ -71,8 +71,13 @@ if python.found()
     dependencies: [gtk_dep, adw_dep, m_dep],
     c_args: ['-Wno-deprecated-declarations'],
   )
+  finish_test = executable('test-finish',
+    'test-finish.c', swash_sources, swash_resources,
+    dependencies: [gtk_dep, adw_dep, m_dep],
+    c_args: ['-Wno-deprecated-declarations'],
+  )
   test('output-filename', python,
-    args: [files('test-output-filename.py'), swash_executable, open_dialog_test],
+    args: [files('test-output-filename.py'), swash_executable, open_dialog_test, finish_test],
     timeout: 120,
     # xvfb-run's automatic display selection races between concurrent runs.
     is_parallel: false,
