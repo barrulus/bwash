@@ -303,6 +303,8 @@ swash_window_begin_draw_stroke(SwashWindow *self)
                                              &self->tool_fill_colors[self->active_tool],
                                              self->blur_type);
   swash_stroke_add_point(self->current_stroke, self->last_draw_x, self->last_draw_y);
+  if (self->active_tool == SWASH_TOOL_ICON)
+    self->current_stroke->icon = self->selected_icon;
 
   if (swash_tool_is_shape(self->active_tool))
     swash_stroke_add_point(self->current_stroke, self->last_draw_x, self->last_draw_y);
@@ -496,6 +498,8 @@ swash_window_global_key_pressed(GtkEventControllerKey *controller,
       target = self->text_tool_button;
     else if (swash_window_shortcut_matches(self, SWASH_SHORTCUT_TOOL_NUMBERING, keyval, state))
       target = self->numbering_tool_button;
+    else if (swash_window_shortcut_matches(self, SWASH_SHORTCUT_TOOL_ICON, keyval, state))
+      target = self->icon_tool_button;
     else if (swash_window_shortcut_matches(self, SWASH_SHORTCUT_TOOL_BLUR, keyval, state))
       target = self->blur_tool_button;
     else if (swash_window_shortcut_matches(self, SWASH_SHORTCUT_TOOL_ERASER, keyval, state))
@@ -1306,7 +1310,7 @@ swash_window_draw_update(GtkGestureDrag *gesture,
                                        &image_y))
     return;
 
-  if (self->active_tool == SWASH_TOOL_NUMBERING)
+  if (self->active_tool == SWASH_TOOL_NUMBERING || self->active_tool == SWASH_TOOL_ICON)
     return;
 
   if (self->active_tool == SWASH_TOOL_MOVE) {
@@ -1441,7 +1445,7 @@ swash_window_draw_end(GtkGestureDrag *gesture,
 
   if (swash_tool_is_shape(self->active_tool))
     swash_stroke_set_last_point(self->current_stroke, image_x, image_y);
-  else
+  else if (self->active_tool != SWASH_TOOL_ICON)
     swash_stroke_add_point(self->current_stroke, image_x, image_y);
 
   if (self->active_tool == SWASH_TOOL_TEXT) {

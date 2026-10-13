@@ -93,6 +93,10 @@
   box-shadow: none;
 }
 
+.tool-group menubutton.icon-picker > button {
+  min-width: 18px;
+}
+
 .zoom-group button:last-child {
   min-width: 0;
   padding: 0 12px;

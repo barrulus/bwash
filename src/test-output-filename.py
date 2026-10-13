@@ -21,7 +21,7 @@ def wait_for(predicate, description):
     raise AssertionError(f"Timed out waiting for {description}")
 
 
-def run_tests(binary, chooser_binary, finish_binary, root):
+def run_tests(binary, chooser_binary, finish_binary, icons_binary, root):
     from PIL import Image
 
     config = root / "config" / "swash"
@@ -317,6 +317,61 @@ def run_tests(binary, chooser_binary, finish_binary, root):
             if failed.parent.exists():
                 failed.parent.chmod(0o700)
 
+    settings.write_text("[preferences]\n")
+    source.write_bytes(png)
+    subprocess.run([icons_binary, str(source)], check=True, timeout=15)
+    assert "selected_icon=heart" in settings.read_text()
+    icon_output = root / "icons.png"
+    process = launch("--stdin", "--output-filename", icon_output, data=png)
+    try:
+        window = wait_for(lambda: windows(process), "icon editor")[0]
+        key(window, "i")
+        geometry = dict(line.split("=", 1) for line in
+                        xdo("getwindowgeometry", "--shell", window).splitlines())
+        x = int(geometry["WIDTH"]) // 2
+        y = int(geometry["HEIGHT"]) // 2
+        xdo("mousemove", "--window", window, x, y, "click", 1)
+        key(window, "ctrl+s")
+        wait_for(lambda: saved(icon_output, (64, 48)), "placed icon export")
+        with Image.open(icon_output) as result:
+            pixels = result.convert("RGB")
+            assert pixels.getpixel((32, 24)) == (0, 255, 0)
+            assert pixels.getpixel((32, 14)) == (255, 255, 255)
+            assert pixels.getpixel((22, 24)) == (255, 255, 255)
+        original_icon = icon_output.read_bytes()
+
+        def export_changed(previous, description):
+            time.sleep(1.6)  # Save feedback temporarily disables save.
+            key(window, "ctrl+s")
+            wait_for(lambda: saved(icon_output, (64, 48))
+                     and icon_output.read_bytes() != previous, description)
+            return icon_output.read_bytes()
+
+        key(window, "ctrl+z")
+        blank = export_changed(original_icon, "icon undo")
+        with Image.open(icon_output) as result:
+            assert result.convert("RGB").tobytes() == image.tobytes()
+        key(window, "ctrl+shift+z")
+        assert export_changed(blank, "icon redo") == original_icon
+
+        key(window, "m")
+        xdo("mousemove", "--window", window, x, y, "mousedown", 1,
+            "mousemove", "--window", window, x + 16, y, "mouseup", 1)
+        moved = export_changed(original_icon, "moved icon export")
+        with Image.open(icon_output) as result:
+            pixels = result.convert("RGB")
+            assert pixels.getpixel((32, 24)) == (255, 255, 255)
+            assert pixels.getpixel((48, 24)) == (0, 255, 0)
+        key(window, "e")
+        xdo("mousemove", "--window", window, x + 16, y, "click", 1)
+        assert export_changed(moved, "erased icon export") == blank
+        key(window, "ctrl+z")
+        assert export_changed(blank, "undo icon erasure") == moved
+        key(window, "ctrl+q")
+        assert process.wait(timeout=10) == 0
+    finally:
+        stop(process)
+
     settings.write_text("[preferences]\nshortcut_finish=Return\nclose_after_copy=true\nclose_after_save=true\n")
     subprocess.run([finish_binary, str(source), str(root / "finish.png")], check=True, timeout=15)
 
@@ -359,10 +414,11 @@ if __name__ == "__main__":
                 __file__, "--inside", str(Path(sys.argv[1]).resolve()),
                 str(Path(sys.argv[2]).resolve()),
                 str(Path(sys.argv[3]).resolve()),
+                str(Path(sys.argv[4]).resolve()),
             ], stdout=log, stderr=subprocess.STDOUT, timeout=90)
             log.seek(0)
             print(log.read(), end="", flush=True)
         sys.exit(result.returncode)
 
     with tempfile.TemporaryDirectory(prefix="bwash-output-test-") as directory:
-        run_tests(sys.argv[2], sys.argv[3], sys.argv[4], Path(directory))
+        run_tests(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], Path(directory))

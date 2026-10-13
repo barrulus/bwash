@@ -14,6 +14,8 @@ swash_sources = files(
   'editor-utils.h',
   'export.c',
   'export.h',
+  'icons.c',
+  'icons.h',
   'ocr.c',
   'ocr.h',
   'render.c',
@@ -47,6 +49,7 @@ editor_utils_test = executable(
     'test-editor-utils.c',
     'editor-utils.c',
     'stroke.c',
+    'icons.c',
   ),
   dependencies: [gtk_dep, adw_dep, m_dep],
 )
@@ -76,8 +79,12 @@ if python.found()
     dependencies: [gtk_dep, adw_dep, m_dep],
     c_args: ['-Wno-deprecated-declarations'],
   )
+  icons_test = executable('test-icons',
+    'test-icons.c', swash_sources, swash_resources,
+    dependencies: [gtk_dep, adw_dep, m_dep],
+  )
   test('output-filename', python,
-    args: [files('test-output-filename.py'), swash_executable, open_dialog_test, finish_test],
+    args: [files('test-output-filename.py'), swash_executable, open_dialog_test, finish_test, icons_test],
     timeout: 120,
     # xvfb-run's automatic display selection races between concurrent runs.
     is_parallel: false,

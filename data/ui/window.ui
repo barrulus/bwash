@@ -258,7 +258,7 @@
                     <property name="center-widget">
                       <object class="GtkBox" id="tool_group">
                         <property name="valign">center</property>
-                        <property name="spacing">4</property>
+                        <property name="spacing">2</property>
                         <property name="sensitive">False</property>
                         <style>
                           <class name="overlay-pill"/>
@@ -360,6 +360,33 @@
                             <property name="icon-name">swash-numbering-symbolic</property>
                             <style>
                               <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+
+                        <child>
+                          <object class="GtkToggleButton" id="icon_tool_button">
+                            <property name="group">brush_tool_button</property>
+                            <property name="tooltip-text">Icon</property>
+                            <property name="child">
+                              <object class="GtkDrawingArea" id="icon_tool_preview">
+                                <property name="content-width">16</property>
+                                <property name="content-height">16</property>
+                              </object>
+                            </property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+
+                        <child>
+                          <object class="GtkMenuButton" id="icon_picker_button">
+                            <property name="tooltip-text">Choose icon</property>
+                            <property name="icon-name">swash-pan-down-symbolic</property>
+                            <style>
+                              <class name="flat"/>
+                              <class name="icon-picker"/>
                             </style>
                           </object>
                         </child>

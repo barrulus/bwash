@@ -30,6 +30,7 @@ typedef enum {
   SWASH_SHORTCUT_TOOL_HIGHLIGHTER,
   SWASH_SHORTCUT_TOOL_TEXT,
   SWASH_SHORTCUT_TOOL_NUMBERING,
+  SWASH_SHORTCUT_TOOL_ICON,
   SWASH_SHORTCUT_TOOL_BLUR,
   SWASH_SHORTCUT_TOOL_ERASER,
   SWASH_SHORTCUT_TOOL_CROP,
@@ -90,6 +91,10 @@ struct _SwashWindow {
   GtkToggleButton *text_tool_button;
   GtkToggleButton *blur_tool_button;
   GtkToggleButton *numbering_tool_button;
+  GtkToggleButton *icon_tool_button;
+  GtkMenuButton *icon_picker_button;
+  GtkDrawingArea *icon_tool_preview;
+  SwashIcon selected_icon;
   GtkToggleButton *move_tool_button;
   GtkButton *rotate_counter_clockwise_button;
   GtkButton *flip_horizontal_button;

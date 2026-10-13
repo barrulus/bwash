@@ -1,4 +1,5 @@
 #include "stroke.h"
+#include "icons.h"
 
 #include <math.h>
 #include <stdint.h>
@@ -240,6 +241,7 @@ swash_tool_width(SwashTool tool)
   case SWASH_TOOL_TEXT:
     return 24.0;
   case SWASH_TOOL_NUMBERING:
+  case SWASH_TOOL_ICON:
     return 32.0;
   case SWASH_TOOL_BRUSH:
   default:
@@ -297,6 +299,7 @@ swash_stroke_copy(SwashStroke *stroke)
   SwashStroke *copy = g_new0(SwashStroke, 1);
 
   copy->tool = stroke->tool;
+  copy->icon = stroke->icon;
   copy->width = stroke->width;
   copy->r = stroke->r;
   copy->g = stroke->g;
@@ -408,6 +411,17 @@ swash_stroke_render(cairo_t         *cr,
       cairo_show_text(cr, stroke->text);
       cairo_restore(cr);
     }
+    return;
+  }
+
+  if (stroke->tool == SWASH_TOOL_ICON) {
+    const SwashPoint *point = &g_array_index(stroke->points, SwashPoint, 0);
+
+    cairo_save(cr);
+    cairo_translate(cr, point->x, point->y);
+    cairo_scale(cr, stroke->width, stroke->width);
+    swash_icon_render(cr, stroke->icon);
+    cairo_restore(cr);
     return;
   }
 
@@ -794,6 +808,15 @@ swash_stroke_intersects_segment(SwashStroke *stroke,
   if (stroke->tool == SWASH_TOOL_TEXT)
     return swash_text_intersects_segment(stroke, x0, y0, x1, y1, radius);
 
+  if (stroke->tool == SWASH_TOOL_ICON && stroke->points->len >= 1) {
+    const SwashPoint *center = &g_array_index(stroke->points, SwashPoint, 0);
+    const double half = stroke->width / 2.0 + radius;
+
+    return swash_segment_intersects_rect(x0, y0, x1, y1,
+                                         center->x - half, center->y - half,
+                                         center->x + half, center->y + half);
+  }
+
   if (stroke->tool == SWASH_TOOL_NUMBERING && stroke->points->len >= 1) {
     const SwashPoint *center = &g_array_index(stroke->points, SwashPoint, 0);
     const double circle_radius = stroke->width / 2.0;
@@ -908,7 +931,8 @@ swash_stroke_get_bounds(SwashStroke *stroke,
     return;
   }
 
-  if (stroke->tool == SWASH_TOOL_NUMBERING && stroke->points->len >= 1) {
+  if ((stroke->tool == SWASH_TOOL_NUMBERING || stroke->tool == SWASH_TOOL_ICON)
+      && stroke->points->len >= 1) {
     const SwashPoint *p = &g_array_index(stroke->points, SwashPoint, 0);
 
     *out_x = p->x - half_w;

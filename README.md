@@ -9,7 +9,7 @@ built with GTK 4 and libadwaita.
 
 ## Features
 
-- Freehand drawing, highlighting, text, arrows, shapes, and numbered markers
+- Freehand drawing, highlighting, text, arrows, shapes, numbered markers, and icons
 - Cropping, rotation, flipping, blurring, and annotation erasing
 - Moveable annotations with configurable colors, fills, and sizes
 - Undo and redo history
@@ -106,6 +106,18 @@ with ordinary saves; unknown extensions use PNG. “Save as copy” remains
 available and does not change the supplied destination. Each editor keeps its
 own destination. Without `--output-filename`, existing save behavior is unchanged.
 
+### Icon annotations
+
+Use the arrow beside the **Icon** tool (next to Numbering) to choose a tick,
+cross, warning, information, question, star, heart, plus, or directional arrow.
+Selecting an icon activates the tool; click the image to place it, just like
+a numbered marker. Click again to place another. The toolbar shows the
+selected icon, and **I** switches back to it (configurable in Preferences).
+
+The existing colour and size controls apply to new icons. Placed icons keep
+their own appearance and support Move, Eraser, undo/redo, clipboard copying,
+and saving. The selected icon is remembered between sessions.
+
 ### Independent captures
 
 Each incoming image opens in a separate editor, including file arguments,
@@ -177,9 +189,10 @@ the `output-filename` test needs Python 3 with Pillow, `xdotool`, `xvfb-run`,
 `gdbus`, and `dbus-run-session`; it reports a skip if these are unavailable. It uses
 an isolated display, session bus, and temporary settings directory. It also
 checks independent captures, undo/redo, file chooser behavior, and separate
-exports with close after save. Native GTK fixtures cover file chooser
-selection and the combined action's cancellation, retry, and text/crop key
-handling.
+exports with close after save, plus icon placement, moving, erasing, undo/redo,
+and saved pixels. Native GTK fixtures cover the icon picker, file chooser
+selection, and the combined action's cancellation, retry, and text/crop key
+handling. The helper tests check every icon's rendering and selection bounds.
 
 The `clipboard-helper` test covers binary transfer, helper failure, and a
 stalled handoff. The optional `clipboard-wayland` test uses a separate,

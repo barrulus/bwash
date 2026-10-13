@@ -17,8 +17,25 @@ typedef enum {
   SWASH_TOOL_TEXT,
   SWASH_TOOL_BLUR,
   SWASH_TOOL_NUMBERING,
+  SWASH_TOOL_ICON,
   SWASH_TOOL_MOVE,
 } SwashTool;
+
+typedef enum {
+  SWASH_ICON_CHECK,
+  SWASH_ICON_CROSS,
+  SWASH_ICON_WARNING,
+  SWASH_ICON_INFO,
+  SWASH_ICON_QUESTION,
+  SWASH_ICON_STAR,
+  SWASH_ICON_HEART,
+  SWASH_ICON_PLUS,
+  SWASH_ICON_ARROW_UP,
+  SWASH_ICON_ARROW_RIGHT,
+  SWASH_ICON_ARROW_DOWN,
+  SWASH_ICON_ARROW_LEFT,
+  SWASH_ICON_COUNT,
+} SwashIcon;
 
 //this is so annoying
 typedef enum {
@@ -34,6 +51,7 @@ typedef struct {
 
 typedef struct {
   SwashTool tool;
+  SwashIcon icon;
   double width;
   double r;
   double g;

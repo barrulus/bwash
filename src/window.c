@@ -5,6 +5,7 @@
 #include "export.h"
 #include "clipboard.h"
 #include "editor-utils.h"
+#include "icons.h"
 #include "ocr.h"
 #include "render.h"
 #include "stroke.h"
@@ -95,6 +96,7 @@ static const SwashShortcutInfo swash_shortcut_info[SWASH_SHORTCUT_COUNT] = {
   [SWASH_SHORTCUT_TOOL_HIGHLIGHTER] = {"tool_highlighter", "Highlighter", NULL, "h", SWASH_TOOL_MARKER},
   [SWASH_SHORTCUT_TOOL_TEXT] = {"tool_text", "Text", NULL, "t", SWASH_TOOL_TEXT},
   [SWASH_SHORTCUT_TOOL_NUMBERING] = {"tool_numbering", "Numbering", NULL, "n", SWASH_TOOL_NUMBERING},
+  [SWASH_SHORTCUT_TOOL_ICON] = {"tool_icon", "Icon", NULL, "i", SWASH_TOOL_ICON},
   [SWASH_SHORTCUT_TOOL_BLUR] = {"tool_blur", "Blur", NULL, "u", SWASH_TOOL_BLUR},
   [SWASH_SHORTCUT_TOOL_ERASER] = {"tool_eraser", "Eraser", NULL, "e", SWASH_TOOL_ERASER},
   [SWASH_SHORTCUT_TOOL_CROP] = {"tool_crop", "Crop", NULL, "c", SWASH_TOOL_CROP},
@@ -119,6 +121,7 @@ swash_tool_key_name(SwashTool tool)
   case SWASH_TOOL_TEXT:      return "text";
   case SWASH_TOOL_BLUR:      return "blur";
   case SWASH_TOOL_NUMBERING: return "numbering";
+  case SWASH_TOOL_ICON:      return "icon";
   case SWASH_TOOL_MOVE:      return "move";
   default:                      return "brush";
   }
@@ -141,6 +144,7 @@ swash_tool_from_key_name(const char *name)
   if (g_strcmp0(name, "text") == 0)         return SWASH_TOOL_TEXT;
   if (g_strcmp0(name, "blur") == 0)         return SWASH_TOOL_BLUR;
   if (g_strcmp0(name, "numbering") == 0)   return SWASH_TOOL_NUMBERING;
+  if (g_strcmp0(name, "icon") == 0)        return SWASH_TOOL_ICON;
   if (g_strcmp0(name, "move") == 0)         return SWASH_TOOL_MOVE;
   return SWASH_TOOL_BRUSH;
 }
@@ -495,6 +499,11 @@ swash_window_load_state(SwashWindow *self)
   if (!g_key_file_has_group(key_file, SWASH_STATE_GROUP))
     return;
 
+  {
+    g_autofree char *icon = g_key_file_get_string(key_file, SWASH_STATE_GROUP, "selected_icon", NULL);
+    self->selected_icon = swash_icon_from_key(icon);
+  }
+
   if (g_key_file_has_key(key_file, SWASH_STATE_GROUP, "active_tool", NULL)) {
     g_autofree char *name = g_key_file_get_string(key_file, SWASH_STATE_GROUP, "active_tool", NULL);
 
@@ -608,6 +617,8 @@ swash_window_save_preferences(SwashWindow *self)
                          SWASH_STATE_GROUP,
                          "blur_type",
                          self->blur_type);
+  g_key_file_set_string(key_file, SWASH_STATE_GROUP, "selected_icon",
+                        swash_icon_key(self->selected_icon));
 
   for (int i = 0; i <= SWASH_TOOL_MOVE; i++) {
     const char *name = swash_tool_key_name(i);
@@ -3330,6 +3341,9 @@ swash_window_bind_template_children(GtkWidgetClass *widget_class)
   gtk_widget_class_bind_template_child(widget_class, SwashWindow, text_tool_button);
   gtk_widget_class_bind_template_child(widget_class, SwashWindow, blur_tool_button);
   gtk_widget_class_bind_template_child(widget_class, SwashWindow, numbering_tool_button);
+  gtk_widget_class_bind_template_child(widget_class, SwashWindow, icon_tool_button);
+  gtk_widget_class_bind_template_child(widget_class, SwashWindow, icon_picker_button);
+  gtk_widget_class_bind_template_child(widget_class, SwashWindow, icon_tool_preview);
   gtk_widget_class_bind_template_child(widget_class, SwashWindow, move_tool_button);
   gtk_widget_class_bind_template_child(widget_class, SwashWindow, rotate_counter_clockwise_button);
   gtk_widget_class_bind_template_child(widget_class, SwashWindow, flip_horizontal_button);
@@ -3615,6 +3629,7 @@ swash_window_button_for_tool(SwashWindow *self,
   case SWASH_TOOL_TEXT:      return self->text_tool_button;
   case SWASH_TOOL_BLUR:      return self->blur_tool_button;
   case SWASH_TOOL_NUMBERING: return self->numbering_tool_button;
+  case SWASH_TOOL_ICON:      return self->icon_tool_button;
   case SWASH_TOOL_MOVE:      return self->move_tool_button;
   default:                      return self->brush_tool_button;
   }

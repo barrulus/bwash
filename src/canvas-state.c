@@ -1,6 +1,7 @@
 #include "window-private.h"
 
 #include "editor-utils.h"
+#include "icons.h"
 #include "stroke.h"
 
 #include <math.h>
@@ -215,6 +216,8 @@ swash_window_tool_toggled(GtkToggleButton *button,
     self->active_tool = SWASH_TOOL_BLUR;
   else if (button == self->numbering_tool_button)
     self->active_tool = SWASH_TOOL_NUMBERING;
+  else if (button == self->icon_tool_button)
+    self->active_tool = SWASH_TOOL_ICON;
   else if (button == self->move_tool_button)
     self->active_tool = SWASH_TOOL_MOVE;
   else
@@ -341,9 +344,78 @@ swash_window_install_history_actions(GtkWidgetClass *widget_class)
   gtk_widget_class_install_action(widget_class, "win.redo", NULL, swash_window_redo_action);
 }
 
+static void
+swash_window_icon_preview_draw(GtkDrawingArea *area,
+                               cairo_t *cr,
+                               int width,
+                               int height,
+                               gpointer user_data)
+{
+  SwashWindow *self = SWASH_WINDOW(user_data);
+  SwashIcon icon = area == self->icon_tool_preview
+    ? self->selected_icon
+    : (SwashIcon) GPOINTER_TO_INT(g_object_get_data(G_OBJECT(area), "swash-icon"));
+  GdkRGBA color;
+
+  gtk_widget_get_color(GTK_WIDGET(area), &color);
+  gdk_cairo_set_source_rgba(cr, &color);
+  cairo_translate(cr, width / 2.0, height / 2.0);
+  cairo_scale(cr, MIN(width, height), MIN(width, height));
+  swash_icon_render(cr, icon);
+}
+
+static void
+swash_window_icon_selected(GtkButton *button, gpointer user_data)
+{
+  SwashWindow *self = SWASH_WINDOW(user_data);
+
+  self->selected_icon = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "swash-icon"));
+  gtk_toggle_button_set_active(self->icon_tool_button, TRUE);
+  gtk_widget_queue_draw(GTK_WIDGET(self->icon_tool_preview));
+  gtk_popover_popdown(gtk_menu_button_get_popover(self->icon_picker_button));
+  gtk_widget_grab_focus(GTK_WIDGET(self->drawing_area));
+}
+
+static void
+swash_window_setup_icon_picker(SwashWindow *self)
+{
+  GtkWidget *popover = gtk_popover_new();
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+  GtkWidget *label = gtk_label_new("Choose icon");
+  GtkWidget *grid = gtk_grid_new();
+
+  gtk_widget_add_css_class(label, "heading");
+  gtk_box_append(GTK_BOX(box), label);
+  gtk_grid_set_row_spacing(GTK_GRID(grid), 4);
+  gtk_grid_set_column_spacing(GTK_GRID(grid), 4);
+  for (int i = 0; i < SWASH_ICON_COUNT; i++) {
+    GtkWidget *button = gtk_button_new();
+    GtkWidget *preview = gtk_drawing_area_new();
+
+    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(preview), 28);
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(preview), 28);
+    g_object_set_data(G_OBJECT(preview), "swash-icon", GINT_TO_POINTER(i));
+    g_object_set_data(G_OBJECT(button), "swash-icon", GINT_TO_POINTER(i));
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(preview),
+                                   swash_window_icon_preview_draw, self, NULL);
+    gtk_button_set_child(GTK_BUTTON(button), preview);
+    gtk_widget_set_tooltip_text(button, swash_icon_name(i));
+    gtk_accessible_update_property(GTK_ACCESSIBLE(button),
+                                    GTK_ACCESSIBLE_PROPERTY_LABEL, swash_icon_name(i), -1);
+    g_signal_connect(button, "clicked", G_CALLBACK(swash_window_icon_selected), self);
+    gtk_grid_attach(GTK_GRID(grid), button, i % 4, i / 4, 1, 1);
+  }
+  gtk_box_append(GTK_BOX(box), grid);
+  gtk_popover_set_child(GTK_POPOVER(popover), box);
+  gtk_menu_button_set_popover(self->icon_picker_button, popover);
+  gtk_drawing_area_set_draw_func(self->icon_tool_preview,
+                                 swash_window_icon_preview_draw, self, NULL);
+}
+
 void
 swash_window_setup_tool_signals(SwashWindow *self)
 {
+  swash_window_setup_icon_picker(self);
   swash_window_connect_tool_toggle(self, self->pan_tool_button);
   swash_window_connect_tool_toggle(self, self->crop_tool_button);
   swash_window_connect_tool_toggle(self, self->brush_tool_button);
@@ -357,6 +429,7 @@ swash_window_setup_tool_signals(SwashWindow *self)
   swash_window_connect_tool_toggle(self, self->text_tool_button);
   swash_window_connect_tool_toggle(self, self->blur_tool_button);
   swash_window_connect_tool_toggle(self, self->numbering_tool_button);
+  swash_window_connect_tool_toggle(self, self->icon_tool_button);
   swash_window_connect_tool_toggle(self, self->move_tool_button);
 
   g_signal_connect(self->undo_button, "clicked", G_CALLBACK(swash_window_undo_clicked), self);
